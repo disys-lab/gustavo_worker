@@ -171,10 +171,14 @@ class DockerFunctions:
         print(("starting container " + container_name))
         try:
             return self.cli.start(container_name)
-        except "APIError" as e:
+        except docker.errors.APIError as e:
             print(e, file=sys.stderr)
-            print("problem starting container - most likely port bind already taken")
-        except not "APIError" as e:
+            print("problem starting container - most likely port bind already taken, "
+                  "or (if GPU_ENABLED) this host has no GPU nvidia-container-toolkit can grant access to")
+            # the container exists (create_container succeeded) but never started -
+            # remove it rather than leaving a dead "Created" container behind.
+            self.remove_container(container_name)
+        except Exception as e:
             print(e, file=sys.stderr)
             print("problem starting container " + container_name)
             os._exit(2)
@@ -184,10 +188,11 @@ class DockerFunctions:
         print(("restarting container " + container_name))
         try:
             return self.cli.restart(container_name, stop_timout)
-        except "APIError" as e:
+        except docker.errors.APIError as e:
             print(e, file=sys.stderr)
-            print("problem starting container - most likely port bind already taken")
-        except not "APIError" as e:
+            print("problem starting container - most likely port bind already taken, "
+                  "or (if GPU_ENABLED) this host has no GPU nvidia-container-toolkit can grant access to")
+        except Exception as e:
             print(e, file=sys.stderr)
             print("problem restarting container " + container_name)
             os._exit(2)
