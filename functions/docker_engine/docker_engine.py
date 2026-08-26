@@ -207,12 +207,20 @@ class DockerFunctions:
 
     # create host_config
     def create_container_host_config(self, port_binds, volumes, devices, privileged, network_mode,
-                                     restart_policy='unless-stopped'):
+                                     restart_policy='unless-stopped', gpu_enabled=False):
         try:
             if restart_policy == "unless-stopped" or restart_policy == "on-failure" or restart_policy == "always":
                 restart_policy = {'Name': restart_policy}
+            # device_requests is docker-py's equivalent of `docker run --gpus all` - it must be set
+            # explicitly per-container, there is no daemon-level default that grants this. Only
+            # attempt it when gpu_enabled is set on the worker itself (GPU_ENABLED env var) - a
+            # worker running on hardware with no GPU/no nvidia-container-toolkit would otherwise
+            # have every container creation fail here.
+            device_requests = [{"Driver": "nvidia", "Count": -1, "Capabilities": [["compute", "utility"]]}] \
+                if gpu_enabled else None
             return self.cli.create_host_config(port_bindings=port_binds, restart_policy=restart_policy, binds=volumes,
-                                               devices=devices, privileged=privileged, network_mode=network_mode)
+                                               devices=devices, privileged=privileged, network_mode=network_mode,
+                                               device_requests=device_requests)
         except Exception as e:
             print(e, file=sys.stderr)
             print("problem creating host config")
@@ -258,7 +266,7 @@ class DockerFunctions:
     # pull image, create hostconfig, create and start the container and bind to networks all in one simple function
     def run_container(self, app_name, container_name, image_name, bind_port, ports, env_vars, version_tag="latest",
                       volumes=[], devices=[], privileged=False, networks=[], restart_policy="unless-stopped",
-                      container_type="app"):
+                      container_type="app", gpu_enabled=False):
         volume_mounts = []
         for volume in volumes:
             splitted_volume = volume.split(":")
@@ -271,7 +279,8 @@ class DockerFunctions:
             network_mode = "bridge"
         self.create_container(app_name, container_name, image_name + ":" + version_tag,
                               self.create_container_host_config(bind_port, volumes, devices, privileged, network_mode,
-                                                                restart_policy=restart_policy), ports, env_vars,
+                                                                restart_policy=restart_policy,
+                                                                gpu_enabled=gpu_enabled), ports, env_vars,
                               volume_mounts, default_network=self.default_net(networks), container_type=container_type)
         self.start_container(container_name)
         for network in networks:

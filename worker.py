@@ -75,7 +75,7 @@ def roll_containers(app_json, force_pull=True):
             docker_socket.run_container(app_json["app_name"], app_json["app_name"] + "-" + str(idx + 1), image_name,
                                         port_binds, port_list, app_json["env_vars"], version_name, app_json["volumes"],
                                         app_json["devices"], app_json["privileged"], app_json["networks"],
-                                        "unless-stopped")
+                                        "unless-stopped", gpu_enabled=gpu_enabled)
             # wait 5 seconds between container rolls to give each container time to start fully
             time.sleep(5)
 
@@ -116,7 +116,7 @@ def start_cron_job_container(cron_job_json, force_pull=True, container_type="cro
                                                                  version_name, cron_job_json["volumes"],
                                                                  cron_job_json["devices"], cron_job_json["privileged"],
                                                                  cron_job_json["networks"], None),
-                       kwargs={"container_type": container_type})
+                       kwargs={"container_type": container_type, "gpu_enabled": gpu_enabled})
             threads.append(t)
             t.start()
             container_number = container_number + 1
@@ -160,7 +160,8 @@ def start_containers(app_json, force_pull=True):
                                                                  port_list, app_json["env_vars"], version_name,
                                                                  app_json["volumes"], app_json["devices"],
                                                                  app_json["privileged"], app_json["networks"],
-                                                                 "unless-stopped"))
+                                                                 "unless-stopped"),
+                       kwargs={"gpu_enabled": gpu_enabled})
             threads.append(t)
             t.start()
             container_number = container_number + 1
@@ -239,6 +240,10 @@ if __name__ == "__main__":
         registry_host = parser.read_configuration_variable("registry_host", default_value="https://index.docker.io/v1/")
         max_restart_wait_in_seconds = parser.read_configuration_variable("max_restart_wait_in_seconds", default_value=0)
         device_group = parser.read_configuration_variable("device_group", required=True)
+        # whether this worker's hardware has a GPU nvidia-container-toolkit can grant access to -
+        # applies to every container this worker launches, not per-app, since GPU-ness is a
+        # property of the device this worker runs on, not of any individual app.
+        gpu_enabled = parser.read_configuration_variable("gpu_enabled", default_value=False)
 
         # the following config variables are for configuring Nebula workers optional reporting, being optional none of it
         # is mandatory
