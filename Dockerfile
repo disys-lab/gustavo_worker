@@ -8,7 +8,13 @@ RUN apk add --no-cache build-base python3-dev linux-headers
 COPY . /worker
 
 # install Python packages
-RUN pip install -r /worker/requirements.txt
+# setuptools<60 + --no-build-isolation: psutil==5.8.0 (2021) fails to compile
+# against whatever setuptools pip's build isolation fetches fresh at build
+# time (a "cython_sources" AttributeError from setuptools' rewritten
+# distutils shim in 60+) - pinning an old setuptools in the main env and
+# disabling isolation makes pip use that pinned copy instead.
+RUN pip install "setuptools<60" wheel && \
+    pip install --no-build-isolation -r /worker/requirements.txt
 
 #set python to be unbuffered
 ENV PYTHONUNBUFFERED=1

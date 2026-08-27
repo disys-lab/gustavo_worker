@@ -1,4 +1,15 @@
-import json, os, time, sys, docker
+import json, os, socket, time, sys, docker
+
+
+def _is_non_https_registry_error(exc):
+    """True if exc is Docker refusing to talk plain HTTP to a registry that
+    isn't in its insecure-registries list - a host/registry misconfiguration,
+    not a transient failure. The exact wording ("http: server gave HTTP
+    response to HTTPS client") comes from Go's net/http, surfaced verbatim
+    inside a docker.errors.APIError's message; confirmed by actually
+    reproducing this against a real plain-HTTP registry:2 container."""
+    return isinstance(exc, docker.errors.APIError) and \
+        "server gave http response to https client" in str(exc).lower()
 
 
 class DockerFunctions:
@@ -100,12 +111,21 @@ class DockerFunctions:
                 print(self.cli.login(username=registry_user, password=registry_pass, registry=registry_host))
             except Exception as e:
                 print(e, file=sys.stderr)
-                print("problem logging into registry")
-                os._exit(2)
+                if _is_non_https_registry_error(e):
+                    print(f"WARNING: registry {registry_host} rejected as not HTTPS - add it to this "
+                          "host's Docker daemon insecure-registries config if it's meant to be plain "
+                          "HTTP. Continuing without registry login for now.")
+                else:
+                    print("problem logging into registry")
+                    os._exit(2)
         else:
             print("no registry user pass combo defined, skipping registry login")
 
-    # pull image with optional version tag and registry auth
+    # pull image with optional version tag and registry auth. Returns True on
+    # success, False if the pull failed because the registry isn't HTTPS
+    # (worth continuing past - the caller should skip this deployment rather
+    # than attempt to run a never-pulled image), and does not return at all
+    # for any other failure (os._exit(2), matching every other method here).
     def pull_image(self, image_name, version_tag="latest"):
         print("pulling image " + image_name + ":" + str(version_tag))
         try:
@@ -115,8 +135,14 @@ class DockerFunctions:
                     print(json.dumps(json.loads(line), indent=4))
                 except Exception as e:
                     print(line)
+            return True
         except Exception as e:
             print(e, file=sys.stderr)
+            if _is_non_https_registry_error(e):
+                print(f"WARNING: registry for image {image_name} rejected as not HTTPS - add it to "
+                      "this host's Docker daemon insecure-registries config if it's meant to be plain "
+                      "HTTP. Skipping this deployment for now.")
+                return False
             print("problem pulling image " + image_name + ":" + str(version_tag))
             os._exit(2)
 
@@ -173,10 +199,14 @@ class DockerFunctions:
         print(("starting container " + container_name))
         try:
             return self.cli.start(container_name)
-        except "APIError" as e:
+        except docker.errors.APIError as e:
             print(e, file=sys.stderr)
-            print("problem starting container - most likely port bind already taken")
-        except not "APIError" as e:
+            print("problem starting container - most likely port bind already taken, "
+                  "or (if GPU_ENABLED) this host has no GPU nvidia-container-toolkit can grant access to")
+            # the container exists (create_container succeeded) but never started -
+            # remove it rather than leaving a dead "Created" container behind.
+            self.remove_container(container_name)
+        except Exception as e:
             print(e, file=sys.stderr)
             print("problem starting container " + container_name)
             os._exit(2)
@@ -186,10 +216,11 @@ class DockerFunctions:
         print(("restarting container " + container_name))
         try:
             return self.cli.restart(container_name, stop_timout)
-        except "APIError" as e:
+        except docker.errors.APIError as e:
             print(e, file=sys.stderr)
-            print("problem starting container - most likely port bind already taken")
-        except not "APIError" as e:
+            print("problem starting container - most likely port bind already taken, "
+                  "or (if GPU_ENABLED) this host has no GPU nvidia-container-toolkit can grant access to")
+        except Exception as e:
             print(e, file=sys.stderr)
             print("problem restarting container " + container_name)
             os._exit(2)
@@ -209,21 +240,65 @@ class DockerFunctions:
 
     # create host_config
     def create_container_host_config(self, port_binds, volumes, devices, privileged, network_mode,
-                                     restart_policy='unless-stopped', shm_size=None):
+                                     restart_policy='unless-stopped', gpu_enabled=False):
         try:
             if restart_policy == "unless-stopped" or restart_policy == "on-failure" or restart_policy == "always":
                 restart_policy = {'Name': restart_policy}
-            # shm_size="" (the app config's sane default when unset) must not reach docker-py as-is:
-            # HostConfig(shm_size="") resolves to ShmSize: 0, which explicitly zeroes out /dev/shm rather
-            # than leaving it at Docker's normal 64m default - "or None" treats any falsy value the same
-            # as "not specified".
+            # device_requests is docker-py's equivalent of `docker run --gpus all` - it must be set
+            # explicitly per-container, there is no daemon-level default that grants this. Only
+            # attempt it when gpu_enabled is set on the worker itself (GPU_ENABLED env var) - a
+            # worker running on hardware with no GPU/no nvidia-container-toolkit would otherwise
+            # have every container creation fail here.
+            device_requests = [{"Driver": "nvidia", "Count": -1, "Capabilities": [["compute", "utility"]]}] \
+                if gpu_enabled else None
             return self.cli.create_host_config(port_bindings=port_binds, restart_policy=restart_policy, binds=volumes,
                                                devices=devices, privileged=privileged, network_mode=network_mode,
-                                               shm_size=shm_size or None)
+                                               device_requests=device_requests)
         except Exception as e:
             print(e, file=sys.stderr)
             print("problem creating host config")
             os._exit(2)
+
+    # one-time startup self-check for GPU_ENABLED - not a per-app check, just
+    # confirms up front (loudly, not fatally) whether this host can actually
+    # satisfy a GPU device request at all, rather than only discovering a
+    # mismatch whenever the first GPU-requiring app happens to get assigned
+    # here. Never raises/exits: a broken self-check must not block a worker
+    # that would otherwise run non-GPU apps just fine.
+    def check_gpu_available(self):
+        try:
+            own_image = self.cli.inspect_container(socket.gethostname())["Config"]["Image"]
+        except Exception as e:
+            print(f"GPU self-check skipped - could not determine this worker's own image: {e}", file=sys.stderr)
+            return None
+        test_name = "gustavo-gpu-selfcheck-" + str(int(time.time()))
+        try:
+            host_config = self.create_container_host_config(
+                port_binds={}, volumes=[], devices=[], privileged=False,
+                network_mode="bridge", gpu_enabled=True,
+            )
+            self.cli.create_container(image=own_image, name=test_name,
+                                      command=["python3", "-c", "pass"], host_config=host_config)
+            self.cli.start(test_name)
+            self.cli.wait(test_name, timeout=15)
+            print("GPU self-check passed - this host can satisfy a GPU device request.")
+            return True
+        except docker.errors.APIError as e:
+            print(
+                f"WARNING: GPU_ENABLED is set, but this host does not appear to have GPU access "
+                f"available via Docker ({e}). Apps requiring GPU access will fail to start on this "
+                f"worker until this is fixed (e.g. install/configure nvidia-container-toolkit).",
+                file=sys.stderr,
+            )
+            return False
+        except Exception as e:
+            print(f"GPU self-check could not complete: {e}", file=sys.stderr)
+            return None
+        finally:
+            try:
+                self.cli.remove_container(test_name, force=True)
+            except Exception:
+                pass
 
     # create networking_config
     def create_networking_config(self, starting_network=""):
@@ -265,7 +340,7 @@ class DockerFunctions:
     # pull image, create hostconfig, create and start the container and bind to networks all in one simple function
     def run_container(self, app_name, container_name, image_name, bind_port, ports, env_vars, version_tag="latest",
                       volumes=[], devices=[], privileged=False, networks=[], restart_policy="unless-stopped",
-                      container_type="app", command=None, shm_size=None):
+                      container_type="app", gpu_enabled=False):
         volume_mounts = []
         for volume in volumes:
             splitted_volume = volume.split(":")
@@ -278,9 +353,9 @@ class DockerFunctions:
             network_mode = "bridge"
         self.create_container(app_name, container_name, image_name + ":" + version_tag,
                               self.create_container_host_config(bind_port, volumes, devices, privileged, network_mode,
-                                                                restart_policy=restart_policy, shm_size=shm_size),
-                              ports, env_vars, volume_mounts, default_network=self.default_net(networks),
-                              container_type=container_type, command=command)
+                                                                restart_policy=restart_policy,
+                                                                gpu_enabled=gpu_enabled), ports, env_vars,
+                              volume_mounts, default_network=self.default_net(networks), container_type=container_type)
         self.start_container(container_name)
         for network in networks:
             # special networks which are created from the container creation as they have to be first
