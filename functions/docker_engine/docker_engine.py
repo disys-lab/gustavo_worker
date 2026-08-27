@@ -158,11 +158,13 @@ class DockerFunctions:
 
     # create container
     def create_container(self, app_name, container_name, image_name, host_configuration, container_ports=[],
-                         env_vars=[], volume_mounts=[], default_network="nebula", container_type="app"):
+                         env_vars=[], volume_mounts=[], default_network="nebula", container_type="app",
+                         command=None):
         print("creating container " + container_name)
         try:
             container_created = self.cli.create_container(image=image_name, name=container_name, ports=container_ports,
                                                           environment=env_vars, host_config=host_configuration,
+                                                          command=command or None,
                                                           labels={container_type + "_name": app_name,
                                                                   "orchestrator": "nebula",
                                                                   "container_type": container_type},
