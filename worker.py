@@ -36,7 +36,10 @@ def restart_containers(app_json, force_pull=True):
     time.sleep(randint(0, max_restart_wait_in_seconds))
     # pull image to speed up downtime between stop & start
     if force_pull is True:
-        docker_socket.pull_image(image_name, version_tag=version_name)
+        if not docker_socket.pull_image(image_name, version_tag=version_name):
+            print(f"skipping restart of {app_json['app_name']} - image pull failed, "
+                  "leaving currently running containers as-is")
+            return
     # stop running containers
     stop_containers(app_json)
     # start new containers
@@ -51,7 +54,10 @@ def roll_containers(app_json, force_pull=True):
     time.sleep(randint(0, max_restart_wait_in_seconds))
     # pull image to speed up downtime between stop & start
     if force_pull is True:
-        docker_socket.pull_image(image_name, version_tag=version_name)
+        if not docker_socket.pull_image(image_name, version_tag=version_name):
+            print(f"skipping roll of {app_json['app_name']} - image pull failed, "
+                  "leaving currently running containers as-is")
+            return
     # list current containers
     containers_list = docker_socket.list_containers(app_json["app_name"], container_type="app")
     # roll each container in turn - not threaded as the order is important when rolling
@@ -104,7 +110,9 @@ def start_cron_job_container(cron_job_json, force_pull=True, container_type="cro
         containers_needed = 1
         # pull required image
         if force_pull is True:
-            docker_socket.pull_image(image_name, version_tag=version_name)
+            if not docker_socket.pull_image(image_name, version_tag=version_name):
+                print(f"skipping cron job {cron_job_json['cron_job_name']} - image pull failed")
+                return
         # start new containers
         container_number = 1
         threads = []
@@ -137,7 +145,9 @@ def start_containers(app_json, force_pull=True):
         containers_needed = containers_required(app_json)
         # pull required image
         if force_pull is True:
-            docker_socket.pull_image(image_name, version_tag=version_name)
+            if not docker_socket.pull_image(image_name, version_tag=version_name):
+                print(f"skipping start of {app_json['app_name']} - image pull failed")
+                return
         # start new containers
         container_number = 1
         threads = []

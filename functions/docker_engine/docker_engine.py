@@ -1,6 +1,17 @@
 import json, os, socket, time, sys, docker
 
 
+def _is_non_https_registry_error(exc):
+    """True if exc is Docker refusing to talk plain HTTP to a registry that
+    isn't in its insecure-registries list - a host/registry misconfiguration,
+    not a transient failure. The exact wording ("http: server gave HTTP
+    response to HTTPS client") comes from Go's net/http, surfaced verbatim
+    inside a docker.errors.APIError's message; confirmed by actually
+    reproducing this against a real plain-HTTP registry:2 container."""
+    return isinstance(exc, docker.errors.APIError) and \
+        "server gave http response to https client" in str(exc).lower()
+
+
 class DockerFunctions:
 
     def __init__(self):
@@ -100,12 +111,21 @@ class DockerFunctions:
                 print(self.cli.login(username=registry_user, password=registry_pass, registry=registry_host))
             except Exception as e:
                 print(e, file=sys.stderr)
-                print("problem logging into registry")
-                os._exit(2)
+                if _is_non_https_registry_error(e):
+                    print(f"WARNING: registry {registry_host} rejected as not HTTPS - add it to this "
+                          "host's Docker daemon insecure-registries config if it's meant to be plain "
+                          "HTTP. Continuing without registry login for now.")
+                else:
+                    print("problem logging into registry")
+                    os._exit(2)
         else:
             print("no registry user pass combo defined, skipping registry login")
 
-    # pull image with optional version tag and registry auth
+    # pull image with optional version tag and registry auth. Returns True on
+    # success, False if the pull failed because the registry isn't HTTPS
+    # (worth continuing past - the caller should skip this deployment rather
+    # than attempt to run a never-pulled image), and does not return at all
+    # for any other failure (os._exit(2), matching every other method here).
     def pull_image(self, image_name, version_tag="latest"):
         print("pulling image " + image_name + ":" + str(version_tag))
         try:
@@ -115,8 +135,14 @@ class DockerFunctions:
                     print(json.dumps(json.loads(line), indent=4))
                 except Exception as e:
                     print(line)
+            return True
         except Exception as e:
             print(e, file=sys.stderr)
+            if _is_non_https_registry_error(e):
+                print(f"WARNING: registry for image {image_name} rejected as not HTTPS - add it to "
+                      "this host's Docker daemon insecure-registries config if it's meant to be plain "
+                      "HTTP. Skipping this deployment for now.")
+                return False
             print("problem pulling image " + image_name + ":" + str(version_tag))
             os._exit(2)
 
