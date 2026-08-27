@@ -132,11 +132,13 @@ class DockerFunctions:
 
     # create container
     def create_container(self, app_name, container_name, image_name, host_configuration, container_ports=[],
-                         env_vars=[], volume_mounts=[], default_network="nebula", container_type="app"):
+                         env_vars=[], volume_mounts=[], default_network="nebula", container_type="app",
+                         command=None):
         print("creating container " + container_name)
         try:
             container_created = self.cli.create_container(image=image_name, name=container_name, ports=container_ports,
                                                           environment=env_vars, host_config=host_configuration,
+                                                          command=command or None,
                                                           labels={container_type + "_name": app_name,
                                                                   "orchestrator": "nebula",
                                                                   "container_type": container_type},
@@ -207,12 +209,17 @@ class DockerFunctions:
 
     # create host_config
     def create_container_host_config(self, port_binds, volumes, devices, privileged, network_mode,
-                                     restart_policy='unless-stopped'):
+                                     restart_policy='unless-stopped', shm_size=None):
         try:
             if restart_policy == "unless-stopped" or restart_policy == "on-failure" or restart_policy == "always":
                 restart_policy = {'Name': restart_policy}
+            # shm_size="" (the app config's sane default when unset) must not reach docker-py as-is:
+            # HostConfig(shm_size="") resolves to ShmSize: 0, which explicitly zeroes out /dev/shm rather
+            # than leaving it at Docker's normal 64m default - "or None" treats any falsy value the same
+            # as "not specified".
             return self.cli.create_host_config(port_bindings=port_binds, restart_policy=restart_policy, binds=volumes,
-                                               devices=devices, privileged=privileged, network_mode=network_mode)
+                                               devices=devices, privileged=privileged, network_mode=network_mode,
+                                               shm_size=shm_size or None)
         except Exception as e:
             print(e, file=sys.stderr)
             print("problem creating host config")
@@ -258,7 +265,7 @@ class DockerFunctions:
     # pull image, create hostconfig, create and start the container and bind to networks all in one simple function
     def run_container(self, app_name, container_name, image_name, bind_port, ports, env_vars, version_tag="latest",
                       volumes=[], devices=[], privileged=False, networks=[], restart_policy="unless-stopped",
-                      container_type="app"):
+                      container_type="app", command=None, shm_size=None):
         volume_mounts = []
         for volume in volumes:
             splitted_volume = volume.split(":")
@@ -271,8 +278,9 @@ class DockerFunctions:
             network_mode = "bridge"
         self.create_container(app_name, container_name, image_name + ":" + version_tag,
                               self.create_container_host_config(bind_port, volumes, devices, privileged, network_mode,
-                                                                restart_policy=restart_policy), ports, env_vars,
-                              volume_mounts, default_network=self.default_net(networks), container_type=container_type)
+                                                                restart_policy=restart_policy, shm_size=shm_size),
+                              ports, env_vars, volume_mounts, default_network=self.default_net(networks),
+                              container_type=container_type, command=command)
         self.start_container(container_name)
         for network in networks:
             # special networks which are created from the container creation as they have to be first
