@@ -282,6 +282,13 @@ if __name__ == "__main__":
         # work against docker socket
         docker_socket = DockerFunctions()
 
+        # one-time GPU capability self-check - only if this worker claims to have
+        # one, so a GPU_ENABLED/no-GPU mismatch is caught loudly at startup
+        # instead of silently, only surfacing whenever the first GPU-requiring
+        # app happens to get assigned here. Warns, never blocks startup.
+        if gpu_enabled:
+            docker_socket.check_gpu_available()
+
         # ensure default "nebula" named network exists
         docker_socket.create_docker_network("nebula", "bridge")
 

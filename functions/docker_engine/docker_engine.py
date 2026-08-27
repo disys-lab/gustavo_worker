@@ -1,4 +1,4 @@
-import json, os, time, sys, docker
+import json, os, socket, time, sys, docker
 
 
 class DockerFunctions:
@@ -230,6 +230,47 @@ class DockerFunctions:
             print(e, file=sys.stderr)
             print("problem creating host config")
             os._exit(2)
+
+    # one-time startup self-check for GPU_ENABLED - not a per-app check, just
+    # confirms up front (loudly, not fatally) whether this host can actually
+    # satisfy a GPU device request at all, rather than only discovering a
+    # mismatch whenever the first GPU-requiring app happens to get assigned
+    # here. Never raises/exits: a broken self-check must not block a worker
+    # that would otherwise run non-GPU apps just fine.
+    def check_gpu_available(self):
+        try:
+            own_image = self.cli.inspect_container(socket.gethostname())["Config"]["Image"]
+        except Exception as e:
+            print(f"GPU self-check skipped - could not determine this worker's own image: {e}", file=sys.stderr)
+            return None
+        test_name = "gustavo-gpu-selfcheck-" + str(int(time.time()))
+        try:
+            host_config = self.create_container_host_config(
+                port_binds={}, volumes=[], devices=[], privileged=False,
+                network_mode="bridge", gpu_enabled=True,
+            )
+            self.cli.create_container(image=own_image, name=test_name,
+                                      command=["python3", "-c", "pass"], host_config=host_config)
+            self.cli.start(test_name)
+            self.cli.wait(test_name, timeout=15)
+            print("GPU self-check passed - this host can satisfy a GPU device request.")
+            return True
+        except docker.errors.APIError as e:
+            print(
+                f"WARNING: GPU_ENABLED is set, but this host does not appear to have GPU access "
+                f"available via Docker ({e}). Apps requiring GPU access will fail to start on this "
+                f"worker until this is fixed (e.g. install/configure nvidia-container-toolkit).",
+                file=sys.stderr,
+            )
+            return False
+        except Exception as e:
+            print(f"GPU self-check could not complete: {e}", file=sys.stderr)
+            return None
+        finally:
+            try:
+                self.cli.remove_container(test_name, force=True)
+            except Exception:
+                pass
 
     # create networking_config
     def create_networking_config(self, starting_network=""):
