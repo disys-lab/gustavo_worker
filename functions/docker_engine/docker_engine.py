@@ -240,7 +240,7 @@ class DockerFunctions:
 
     # create host_config
     def create_container_host_config(self, port_binds, volumes, devices, privileged, network_mode,
-                                     restart_policy='unless-stopped', gpu_enabled=False):
+                                     restart_policy='unless-stopped', gpu_enabled=False, shm_size=None):
         try:
             if restart_policy == "unless-stopped" or restart_policy == "on-failure" or restart_policy == "always":
                 restart_policy = {'Name': restart_policy}
@@ -251,9 +251,13 @@ class DockerFunctions:
             # have every container creation fail here.
             device_requests = [{"Driver": "nvidia", "Count": -1, "Capabilities": [["compute", "utility"]]}] \
                 if gpu_enabled else None
+            # shm_size="" (the app config's sane default when unset) must not reach docker-py as-is:
+            # HostConfig(shm_size="") resolves to ShmSize: 0, which explicitly zeroes out /dev/shm rather
+            # than leaving it at Docker's normal 64m default - "or None" treats any falsy value the same
+            # as "not specified".
             return self.cli.create_host_config(port_bindings=port_binds, restart_policy=restart_policy, binds=volumes,
                                                devices=devices, privileged=privileged, network_mode=network_mode,
-                                               device_requests=device_requests)
+                                               device_requests=device_requests, shm_size=shm_size or None)
         except Exception as e:
             print(e, file=sys.stderr)
             print("problem creating host config")
@@ -340,7 +344,7 @@ class DockerFunctions:
     # pull image, create hostconfig, create and start the container and bind to networks all in one simple function
     def run_container(self, app_name, container_name, image_name, bind_port, ports, env_vars, version_tag="latest",
                       volumes=[], devices=[], privileged=False, networks=[], restart_policy="unless-stopped",
-                      container_type="app", gpu_enabled=False):
+                      container_type="app", gpu_enabled=False, command=None, shm_size=None):
         volume_mounts = []
         for volume in volumes:
             splitted_volume = volume.split(":")
@@ -354,8 +358,9 @@ class DockerFunctions:
         self.create_container(app_name, container_name, image_name + ":" + version_tag,
                               self.create_container_host_config(bind_port, volumes, devices, privileged, network_mode,
                                                                 restart_policy=restart_policy,
-                                                                gpu_enabled=gpu_enabled), ports, env_vars,
-                              volume_mounts, default_network=self.default_net(networks), container_type=container_type)
+                                                                gpu_enabled=gpu_enabled, shm_size=shm_size),
+                              ports, env_vars, volume_mounts, default_network=self.default_net(networks),
+                              container_type=container_type, command=command)
         self.start_container(container_name)
         for network in networks:
             # special networks which are created from the container creation as they have to be first
