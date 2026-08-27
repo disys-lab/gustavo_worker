@@ -81,7 +81,8 @@ def roll_containers(app_json, force_pull=True):
             docker_socket.run_container(app_json["app_name"], app_json["app_name"] + "-" + str(idx + 1), image_name,
                                         port_binds, port_list, app_json["env_vars"], version_name, app_json["volumes"],
                                         app_json["devices"], app_json["privileged"], app_json["networks"],
-                                        "unless-stopped", gpu_enabled=gpu_enabled)
+                                        "unless-stopped", gpu_enabled=gpu_enabled, command=app_json.get("command"),
+                                        shm_size=app_json.get("shm_size"))
             # wait 5 seconds between container rolls to give each container time to start fully
             time.sleep(5)
 
@@ -124,7 +125,9 @@ def start_cron_job_container(cron_job_json, force_pull=True, container_type="cro
                                                                  version_name, cron_job_json["volumes"],
                                                                  cron_job_json["devices"], cron_job_json["privileged"],
                                                                  cron_job_json["networks"], None),
-                       kwargs={"container_type": container_type, "gpu_enabled": gpu_enabled})
+                       kwargs={"container_type": container_type, "gpu_enabled": gpu_enabled,
+                               "command": cron_job_json.get("command"),
+                               "shm_size": cron_job_json.get("shm_size")})
             threads.append(t)
             t.start()
             container_number = container_number + 1
@@ -171,7 +174,8 @@ def start_containers(app_json, force_pull=True):
                                                                  app_json["volumes"], app_json["devices"],
                                                                  app_json["privileged"], app_json["networks"],
                                                                  "unless-stopped"),
-                       kwargs={"gpu_enabled": gpu_enabled})
+                       kwargs={"gpu_enabled": gpu_enabled, "command": app_json.get("command"),
+                               "shm_size": app_json.get("shm_size")})
             threads.append(t)
             t.start()
             container_number = container_number + 1
