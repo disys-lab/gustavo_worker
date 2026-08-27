@@ -36,7 +36,10 @@ def restart_containers(app_json, force_pull=True):
     time.sleep(randint(0, max_restart_wait_in_seconds))
     # pull image to speed up downtime between stop & start
     if force_pull is True:
-        docker_socket.pull_image(image_name, version_tag=version_name)
+        if not docker_socket.pull_image(image_name, version_tag=version_name):
+            print(f"skipping restart of {app_json['app_name']} - image pull failed, "
+                  "leaving currently running containers as-is")
+            return
     # stop running containers
     stop_containers(app_json)
     # start new containers
@@ -51,7 +54,10 @@ def roll_containers(app_json, force_pull=True):
     time.sleep(randint(0, max_restart_wait_in_seconds))
     # pull image to speed up downtime between stop & start
     if force_pull is True:
-        docker_socket.pull_image(image_name, version_tag=version_name)
+        if not docker_socket.pull_image(image_name, version_tag=version_name):
+            print(f"skipping roll of {app_json['app_name']} - image pull failed, "
+                  "leaving currently running containers as-is")
+            return
     # list current containers
     containers_list = docker_socket.list_containers(app_json["app_name"], container_type="app")
     # roll each container in turn - not threaded as the order is important when rolling
@@ -75,7 +81,7 @@ def roll_containers(app_json, force_pull=True):
             docker_socket.run_container(app_json["app_name"], app_json["app_name"] + "-" + str(idx + 1), image_name,
                                         port_binds, port_list, app_json["env_vars"], version_name, app_json["volumes"],
                                         app_json["devices"], app_json["privileged"], app_json["networks"],
-                                        "unless-stopped")
+                                        "unless-stopped", gpu_enabled=gpu_enabled)
             # wait 5 seconds between container rolls to give each container time to start fully
             time.sleep(5)
 
@@ -104,7 +110,9 @@ def start_cron_job_container(cron_job_json, force_pull=True, container_type="cro
         containers_needed = 1
         # pull required image
         if force_pull is True:
-            docker_socket.pull_image(image_name, version_tag=version_name)
+            if not docker_socket.pull_image(image_name, version_tag=version_name):
+                print(f"skipping cron job {cron_job_json['cron_job_name']} - image pull failed")
+                return
         # start new containers
         container_number = 1
         threads = []
@@ -116,7 +124,7 @@ def start_cron_job_container(cron_job_json, force_pull=True, container_type="cro
                                                                  version_name, cron_job_json["volumes"],
                                                                  cron_job_json["devices"], cron_job_json["privileged"],
                                                                  cron_job_json["networks"], None),
-                       kwargs={"container_type": container_type})
+                       kwargs={"container_type": container_type, "gpu_enabled": gpu_enabled})
             threads.append(t)
             t.start()
             container_number = container_number + 1
@@ -137,7 +145,9 @@ def start_containers(app_json, force_pull=True):
         containers_needed = containers_required(app_json)
         # pull required image
         if force_pull is True:
-            docker_socket.pull_image(image_name, version_tag=version_name)
+            if not docker_socket.pull_image(image_name, version_tag=version_name):
+                print(f"skipping start of {app_json['app_name']} - image pull failed")
+                return
         # start new containers
         container_number = 1
         threads = []
@@ -160,7 +170,8 @@ def start_containers(app_json, force_pull=True):
                                                                  port_list, app_json["env_vars"], version_name,
                                                                  app_json["volumes"], app_json["devices"],
                                                                  app_json["privileged"], app_json["networks"],
-                                                                 "unless-stopped"))
+                                                                 "unless-stopped"),
+                       kwargs={"gpu_enabled": gpu_enabled})
             threads.append(t)
             t.start()
             container_number = container_number + 1
@@ -239,6 +250,10 @@ if __name__ == "__main__":
         registry_host = parser.read_configuration_variable("registry_host", default_value="https://index.docker.io/v1/")
         max_restart_wait_in_seconds = parser.read_configuration_variable("max_restart_wait_in_seconds", default_value=0)
         device_group = parser.read_configuration_variable("device_group", required=True)
+        # whether this worker's hardware has a GPU nvidia-container-toolkit can grant access to -
+        # applies to every container this worker launches, not per-app, since GPU-ness is a
+        # property of the device this worker runs on, not of any individual app.
+        gpu_enabled = parser.read_configuration_variable("gpu_enabled", default_value=False)
 
         # the following config variables are for configuring Nebula workers optional reporting, being optional none of it
         # is mandatory
@@ -276,6 +291,13 @@ if __name__ == "__main__":
 
         # work against docker socket
         docker_socket = DockerFunctions()
+
+        # one-time GPU capability self-check - only if this worker claims to have
+        # one, so a GPU_ENABLED/no-GPU mismatch is caught loudly at startup
+        # instead of silently, only surfacing whenever the first GPU-requiring
+        # app happens to get assigned here. Warns, never blocks startup.
+        if gpu_enabled:
+            docker_socket.check_gpu_available()
 
         # ensure default "nebula" named network exists
         docker_socket.create_docker_network("nebula", "bridge")
