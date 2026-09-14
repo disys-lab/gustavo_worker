@@ -2,6 +2,7 @@ from NebulaPythonSDK import Nebula
 from functions.reporting.reporting import *
 from functions.reporting.kafka import *
 from functions.reporting.redis import *
+from functions.reporting.reporter import *
 from functions.docker_engine.docker_engine import *
 from functions.misc.server import *
 from functions.misc.cron_schedule import *
@@ -270,6 +271,9 @@ if __name__ == "__main__":
         redis_expire_time = parser.read_configuration_variable("redis_expire_time", default_value=2*nebula_manager_check_in_time)
         redis_key_prefix = parser.read_configuration_variable("redis_key_prefix", default_value="nebula-reports")
 
+        reporter_host = parser.read_configuration_variable("reporter_host", default_value=None)
+        reporter_port = parser.read_configuration_variable("reporter_port", default_value=None)
+
         kafka_bootstrap_servers = parser.read_configuration_variable("kafka_bootstrap_servers", default_value=None)
         kafka_security_protocol = parser.read_configuration_variable("kafka_security_protocol",
                                                                      default_value="PLAINTEXT")
@@ -410,7 +414,21 @@ if __name__ == "__main__":
                     print("failed creating reporting redis connection object - exiting")
                     os._exit(2)
 
-        if kafka_bootstrap_servers is not None or redis_host is not None:
+        if reporter_host is not None:
+            try:
+                print("creating reporting reporter connection object")
+                reporter_connection = ReporterConnection(reporter_host, reporter_port,
+                                                         nebula_manager_auth_user, nebula_manager_auth_password)
+            except Exception as e:
+                print(e, file=sys.stderr)
+                if reporting_fail_hard is False:
+                    print("failed creating reporting reporter connection object")
+                    pass
+                else:
+                    print("failed creating reporting reporter connection object - exiting")
+                    os._exit(2)
+
+        if kafka_bootstrap_servers is not None or redis_host is not None or reporter_host is not None:
             try:
                 reporting_object = ReportingDocument(docker_socket, device_group)
             except Exception as e:
@@ -555,6 +573,20 @@ if __name__ == "__main__":
                         pass
                     else:
                         print("failed reporting state to redis - exiting")
+                        os._exit(2)
+
+            if reporter_host is not None:
+                try:
+                    if monotonic_id_increase is True or report_on_update_only is False:
+                        report = reporting_object.current_status_report(local_device_group_info, monotonic_id_increase)
+                        reporter_connection.push_report(report)
+                except Exception as e:
+                    print(e, file=sys.stderr)
+                    if reporting_fail_hard is False:
+                        print("failed reporting state to reporter")
+                        pass
+                    else:
+                        print("failed reporting state to reporter - exiting")
                         os._exit(2)
 
     except Exception as e:
