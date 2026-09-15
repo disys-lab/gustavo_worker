@@ -116,8 +116,9 @@ class DockerFunctions:
                           "host's Docker daemon insecure-registries config if it's meant to be plain "
                           "HTTP. Continuing without registry login for now.")
                 else:
-                    print("problem logging into registry")
-                    os._exit(2)
+                    print(f"WARNING: could not log in to registry {registry_host} - continuing without "
+                          "registry login. Any app whose image needs this registry's auth will fail to "
+                          "pull.")
         else:
             print("no registry user pass combo defined, skipping registry login")
 
