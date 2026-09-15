@@ -3,8 +3,8 @@ import sys, requests
 
 class ReporterConnection:
 
-    def __init__(self, reporter_host, reporter_port, nebula_username, nebula_password):
-        self.url_base = f"http://{reporter_host}:{reporter_port}/api/reports"
+    def __init__(self, reporter_host, reporter_port, nebula_username, nebula_password, protocol="http"):
+        self.url_base = f"{protocol}://{reporter_host}:{reporter_port}/api/reports"
         self.auth = (nebula_username, nebula_password)
 
     def push_report(self, report):

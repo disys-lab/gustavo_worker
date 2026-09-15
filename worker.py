@@ -273,6 +273,7 @@ if __name__ == "__main__":
 
         reporter_host = parser.read_configuration_variable("reporter_host", default_value=None)
         reporter_port = parser.read_configuration_variable("reporter_port", default_value=None)
+        reporter_protocol = parser.read_configuration_variable("reporter_protocol", default_value="http")
 
         kafka_bootstrap_servers = parser.read_configuration_variable("kafka_bootstrap_servers", default_value=None)
         kafka_security_protocol = parser.read_configuration_variable("kafka_security_protocol",
@@ -418,7 +419,8 @@ if __name__ == "__main__":
             try:
                 print("creating reporting reporter connection object")
                 reporter_connection = ReporterConnection(reporter_host, reporter_port,
-                                                         nebula_manager_auth_user, nebula_manager_auth_password)
+                                                         nebula_manager_auth_user, nebula_manager_auth_password,
+                                                         protocol=reporter_protocol)
             except Exception as e:
                 print(e, file=sys.stderr)
                 if reporting_fail_hard is False:
