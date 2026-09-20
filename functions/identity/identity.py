@@ -93,10 +93,16 @@ def read_credential(default_username, default_password):
     # effect without restarting the worker. Falls back to the given
     # defaults if the file is missing, unreadable, or caught mid-write by
     # a concurrent refresh - never raises, never blocks the check-in loop.
+    # `or default` rather than dict.get's own default: a bad refresh that
+    # writes syntactically valid JSON with empty values ({"username": "",
+    # "password": ""}) must fall back too, not adopt an empty credential -
+    # dict.get only falls back when the key is missing entirely.
     try:
         with open(CREDENTIAL_JSON_PATH) as f:
             data = json.load(f)
-        return data.get("username", default_username), data.get("password", default_password)
+        username = data.get("username") or default_username
+        password = data.get("password") or default_password
+        return username, password
     except Exception as e:
         print(e, file=sys.stderr)
         print("failed reading credential.json - using last known credential")
