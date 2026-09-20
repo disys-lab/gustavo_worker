@@ -3,6 +3,7 @@ from functions.reporting.reporting import *
 from functions.reporting.kafka import *
 from functions.reporting.redis import *
 from functions.reporting.reporter import *
+from functions.identity.identity import bootstrap_identity
 from functions.docker_engine.docker_engine import *
 from functions.misc.server import *
 from functions.misc.cron_schedule import *
@@ -336,6 +337,15 @@ if __name__ == "__main__":
             print("error confirming connection to nebula manager - please check connection & authentication params and "
                   "that the manager is online")
             os._exit(2)
+
+        # one-time worker identity bootstrap - writes /etc/gustavo-worker/host.json &
+        # credential.json, and registers with reporter's worker directory if reporter
+        # is configured. node_id is generated once and persisted; every other run of
+        # this worker container reuses the same one rather than regenerating it.
+        print("bootstrapping worker identity")
+        bootstrap_identity(device_group, nebula_manager_auth_user, nebula_manager_auth_password,
+                           reporter_host=reporter_host, reporter_port=reporter_port,
+                           reporter_protocol=reporter_protocol)
 
         # stop all nebula managed containers on start to ensure a clean slate to work on
         print("stopping all preexisting nebula managed app containers in order to ensure a clean slate on boot")

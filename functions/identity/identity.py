@@ -1,0 +1,87 @@
+import json, os, socket, sys, uuid
+import requests
+
+HOST_JSON_PATH = "/etc/gustavo-worker/host.json"
+CREDENTIAL_JSON_PATH = "/etc/gustavo-worker/credential.json"
+
+
+def _get_host_ip():
+    # connect-trick: no packets actually sent, just asks the OS which
+    # local interface/address it would route through - relies on this
+    # worker running with host networking to return a real host IP
+    # rather than a container-internal bridge address.
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def bootstrap_identity(device_group, nebula_username, nebula_password,
+                       reporter_host=None, reporter_port=None, reporter_protocol="http"):
+    # one-time worker identity bootstrap - writes host.json/credential.json to disk
+    # and registers with reporter's worker directory. Only runs the node_id-generating
+    # part once per worker: if host.json already exists, its node_id is reused as-is
+    # and never regenerated - everything else (ips, device_group) is written fresh
+    # every call. Periodic refresh after this initial call is handled by a separate,
+    # dedicated cron job component, not by this worker process.
+    os.makedirs(os.path.dirname(HOST_JSON_PATH), exist_ok=True)
+
+    if os.path.exists(HOST_JSON_PATH):
+        try:
+            with open(HOST_JSON_PATH) as f:
+                node_id = json.load(f)["node_id"]
+        except Exception as e:
+            print(e, file=sys.stderr)
+            print("failed reading existing host.json node_id - generating a new one")
+            node_id = str(uuid.uuid4())
+    else:
+        node_id = str(uuid.uuid4())
+
+    host_ip = _get_host_ip()
+    auth = (nebula_username, nebula_password)
+
+    remote_ip = ""
+    if reporter_host is not None:
+        try:
+            resp = requests.get(f"{reporter_protocol}://{reporter_host}:{reporter_port}/whoami",
+                                auth=auth, timeout=10)
+            if resp.status_code == 200:
+                remote_ip = resp.json().get("remote_ip", "")
+            else:
+                print(f"whoami call failed: HTTP {resp.status_code} {resp.text}", file=sys.stderr)
+        except Exception as e:
+            print(e, file=sys.stderr)
+            print("whoami call failed - continuing with empty remote_ip")
+
+    try:
+        with open(HOST_JSON_PATH, "w") as f:
+            json.dump({"node_id": node_id, "host_ip": host_ip, "remote_ip": remote_ip,
+                      "device_group": device_group}, f)
+    except Exception as e:
+        print(e, file=sys.stderr)
+        print("failed writing host.json")
+
+    try:
+        with open(CREDENTIAL_JSON_PATH, "w") as f:
+            json.dump({"username": nebula_username, "token": nebula_password}, f)
+        os.chmod(CREDENTIAL_JSON_PATH, 0o600)
+    except Exception as e:
+        print(e, file=sys.stderr)
+        print("failed writing credential.json")
+
+    if reporter_host is not None:
+        try:
+            resp = requests.post(f"{reporter_protocol}://{reporter_host}:{reporter_port}/api/directory/{device_group}",
+                                json={"node_id": node_id, "host_ip": host_ip, "remote_ip": remote_ip},
+                                auth=auth, timeout=10)
+            if resp.status_code != 200:
+                print(f"directory registration failed: HTTP {resp.status_code} {resp.text}", file=sys.stderr)
+        except Exception as e:
+            print(e, file=sys.stderr)
+            print("directory registration failed")
+
+    return node_id
