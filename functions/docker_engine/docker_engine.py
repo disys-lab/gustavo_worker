@@ -1,5 +1,7 @@
 import json, os, socket, time, sys, docker
 
+from functions.identity.identity import read_registry_credential
+
 
 def _is_non_https_registry_error(exc):
     """True if exc is Docker refusing to talk plain HTTP to a registry that
@@ -16,6 +18,11 @@ class DockerFunctions:
 
     def __init__(self):
         self.cli = docker.APIClient(base_url='unix://var/run/docker.sock', version="auto")
+        # fallback registry credential for pull_image, used only if
+        # credential.json can't be read - set by registry_login, from
+        # whatever this worker was originally started with.
+        self._registry_user = None
+        self._registry_pass = None
 
     # check network exists:
     def check_network_exists(self, net_name):
@@ -106,6 +113,13 @@ class DockerFunctions:
     def registry_login(self, registry_user=None, registry_pass=None, registry_host=""):
         if registry_user is not None and registry_user != "skip" and registry_pass is not None and \
                 registry_pass != "skip":
+            # remembered as pull_image's fallback if credential.json can't be
+            # read later - the SDK's own login() only reloads its in-memory
+            # auth cache from disk once, on first use, so it can't pick up a
+            # later credential.json refresh on its own; pull_image reads the
+            # file itself instead of relying on this cache for that reason.
+            self._registry_user = registry_user
+            self._registry_pass = registry_pass
             print("logging in to registry")
             try:
                 print(self.cli.login(username=registry_user, password=registry_pass, registry=registry_host))
@@ -129,9 +143,16 @@ class DockerFunctions:
     # for any other failure (os._exit(2), matching every other method here).
     def pull_image(self, image_name, version_tag="latest"):
         print("pulling image " + image_name + ":" + str(version_tag))
+        # read fresh from credential.json every call rather than relying on
+        # login()'s in-memory auth cache, which never picks up a later
+        # refresh on its own (see registry_login's comment) - this is the
+        # only place that needs to know about a rotated registry credential
+        # at all, so the worker's own check-in loop doesn't need to.
+        registry_user, registry_pass = read_registry_credential(self._registry_user, self._registry_pass)
+        auth_config = {"username": registry_user, "password": registry_pass} if registry_user and registry_pass else None
         try:
             print(image_name)
-            for line in self.cli.pull(image_name, str(version_tag), stream=True):
+            for line in self.cli.pull(image_name, str(version_tag), stream=True, auth_config=auth_config):
                 try:
                     print(json.dumps(json.loads(line), indent=4))
                 except Exception as e:
