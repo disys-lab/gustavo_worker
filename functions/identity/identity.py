@@ -21,7 +21,8 @@ def _get_host_ip():
 
 
 def bootstrap_identity(device_group, nebula_username, nebula_password,
-                       reporter_host=None, reporter_port=None, reporter_protocol="http"):
+                       reporter_host=None, reporter_port=None, reporter_protocol="http",
+                       registry_username=None, registry_password=None):
     # one-time worker identity bootstrap - writes host.json/credential.json to disk
     # and registers with reporter's worker directory. Only runs the node_id-generating
     # part once per worker: if host.json already exists, its node_id is reused as-is
@@ -67,7 +68,8 @@ def bootstrap_identity(device_group, nebula_username, nebula_password,
 
     try:
         with open(CREDENTIAL_JSON_PATH, "w") as f:
-            json.dump({"username": nebula_username, "password": nebula_password}, f)
+            json.dump({"username": nebula_username, "password": nebula_password,
+                      "registry_username": registry_username, "registry_password": registry_password}, f)
         os.chmod(CREDENTIAL_JSON_PATH, 0o600)
     except Exception as e:
         print(e, file=sys.stderr)
@@ -106,4 +108,21 @@ def read_credential(default_username, default_password):
     except Exception as e:
         print(e, file=sys.stderr)
         print("failed reading credential.json - using last known credential")
+        return default_username, default_password
+
+
+def read_registry_credential(default_username, default_password):
+    # same shape and fallback rules as read_credential, for the separate
+    # registry_username/registry_password fields - deliberately not the
+    # same keys, since a bad refresh touching one credential shouldn't be
+    # able to collide with or blank out the other.
+    try:
+        with open(CREDENTIAL_JSON_PATH) as f:
+            data = json.load(f)
+        username = data.get("registry_username") or default_username
+        password = data.get("registry_password") or default_password
+        return username, password
+    except Exception as e:
+        print(e, file=sys.stderr)
+        print("failed reading credential.json for registry auth - using last known credential")
         return default_username, default_password

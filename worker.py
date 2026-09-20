@@ -345,7 +345,8 @@ if __name__ == "__main__":
         print("bootstrapping worker identity")
         bootstrap_identity(device_group, nebula_manager_auth_user, nebula_manager_auth_password,
                            reporter_host=reporter_host, reporter_port=reporter_port,
-                           reporter_protocol=reporter_protocol)
+                           reporter_protocol=reporter_protocol,
+                           registry_username=registry_auth_user, registry_password=registry_auth_password)
 
         # stop all nebula managed containers on start to ensure a clean slate to work on
         print("stopping all preexisting nebula managed app containers in order to ensure a clean slate on boot")
