@@ -3,7 +3,7 @@ from functions.reporting.reporting import *
 from functions.reporting.kafka import *
 from functions.reporting.redis import *
 from functions.reporting.reporter import *
-from functions.identity.identity import bootstrap_identity
+from functions.identity.identity import bootstrap_identity, read_credential
 from functions.docker_engine.docker_engine import *
 from functions.misc.server import *
 from functions.misc.cron_schedule import *
@@ -461,6 +461,28 @@ if __name__ == "__main__":
             time.sleep(nebula_manager_check_in_time)
 
             monotonic_id_increase = False
+
+            # re-read the credential file every check-in cycle so a credential
+            # rotation (done by a separate, dedicated cron job - not this
+            # process) takes effect without restarting this worker. Only
+            # reconnects when the credential actually changed, to avoid
+            # rebuilding the Nebula connection object every single cycle for
+            # no reason.
+            refreshed_user, refreshed_password = read_credential(nebula_manager_auth_user, nebula_manager_auth_password)
+            if (refreshed_user, refreshed_password) != (nebula_manager_auth_user, nebula_manager_auth_password):
+                print("credential change detected in credential.json - reconnecting to nebula manager")
+                nebula_manager_auth_user, nebula_manager_auth_password = refreshed_user, refreshed_password
+                nebula_connection = Nebula(username=nebula_manager_auth_user, password=nebula_manager_auth_password,
+                                           host=nebula_manager_host, port=nebula_manager_port,
+                                           protocol=nebula_manager_protocol, host_uri=nebula_manager_uri,
+                                           request_timeout=nebula_manager_request_timeout,
+                                           token=nebula_manager_auth_token)
+                # reporter_connection's auth is just a (username, password) tuple it
+                # reads on every push_report call - no need to rebuild the object,
+                # just update it in place, same as nebula_connection above achieves
+                # by reconnecting.
+                if reporter_host is not None:
+                    reporter_connection.auth = (nebula_manager_auth_user, nebula_manager_auth_password)
 
             # get the device_group configuration
             remote_device_group_info = get_device_group_info(nebula_connection, device_group)

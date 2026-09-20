@@ -67,7 +67,7 @@ def bootstrap_identity(device_group, nebula_username, nebula_password,
 
     try:
         with open(CREDENTIAL_JSON_PATH, "w") as f:
-            json.dump({"username": nebula_username, "token": nebula_password}, f)
+            json.dump({"username": nebula_username, "password": nebula_password}, f)
         os.chmod(CREDENTIAL_JSON_PATH, 0o600)
     except Exception as e:
         print(e, file=sys.stderr)
@@ -85,3 +85,19 @@ def bootstrap_identity(device_group, nebula_username, nebula_password,
             print("directory registration failed")
 
     return node_id
+
+
+def read_credential(default_username, default_password):
+    # re-read on every call so a credential rotation (done by a separate,
+    # dedicated credential-refresher cron job - not this process) takes
+    # effect without restarting the worker. Falls back to the given
+    # defaults if the file is missing, unreadable, or caught mid-write by
+    # a concurrent refresh - never raises, never blocks the check-in loop.
+    try:
+        with open(CREDENTIAL_JSON_PATH) as f:
+            data = json.load(f)
+        return data.get("username", default_username), data.get("password", default_password)
+    except Exception as e:
+        print(e, file=sys.stderr)
+        print("failed reading credential.json - using last known credential")
+        return default_username, default_password
