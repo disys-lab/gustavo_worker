@@ -22,13 +22,18 @@ def _get_host_ip():
 
 def bootstrap_identity(device_group, nebula_username, nebula_password,
                        reporter_host=None, reporter_port=None, reporter_protocol="http",
-                       registry_username=None, registry_password=None):
+                       registry_username=None, registry_password=None, registry_host=None):
     # one-time worker identity bootstrap - writes host.json/credential.json to disk
     # and registers with reporter's worker directory. Only runs the node_id-generating
     # part once per worker: if host.json already exists, its node_id is reused as-is
     # and never regenerated - everything else (ips, device_group) is written fresh
     # every call. Periodic refresh after this initial call is handled by a separate,
     # dedicated cron job component, not by this worker process.
+    #
+    # registry_host is written for other readers of credential.json (e.g. the
+    # separate credential-refresher, or an app that wants to pull from the same
+    # registry) - pull_image itself doesn't need it, since docker resolves the
+    # registry straight from the image reference, not from a passed-in host.
     os.makedirs(os.path.dirname(HOST_JSON_PATH), exist_ok=True)
 
     if os.path.exists(HOST_JSON_PATH):
@@ -69,7 +74,8 @@ def bootstrap_identity(device_group, nebula_username, nebula_password,
     try:
         with open(CREDENTIAL_JSON_PATH, "w") as f:
             json.dump({"username": nebula_username, "password": nebula_password,
-                      "registry_username": registry_username, "registry_password": registry_password}, f)
+                      "registry_username": registry_username, "registry_password": registry_password,
+                      "registry_host": registry_host}, f)
         os.chmod(CREDENTIAL_JSON_PATH, 0o600)
     except Exception as e:
         print(e, file=sys.stderr)
