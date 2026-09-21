@@ -111,14 +111,10 @@ def start_cron_job_container(cron_job_json, force_pull=True, container_type="cro
     if cron_job_json["running"] is True:
         image_registry_name, image_name, version_name = split_container_name_version(cron_job_json["docker_image"])
         containers_needed = 1
-        # "self" resolves to this worker's own container name (worker_<device_group>),
-        # using device_group from this same running process - not read from any file.
-        # Lets one cron job definition, assigned to multiple device groups, correctly
-        # inherit each device group's own worker volumes rather than a name hardcoded
-        # for one specific device group.
-        volumes_from = cron_job_json.get("volumes_from")
-        if volumes_from:
-            volumes_from = [f"worker_{device_group}" if v == "self" else v for v in volumes_from]
+        # Every cron job container inherits this worker's own volumes, unconditionally -
+        # no cron job config field, no per-job opt-in. device_group is this same running
+        # process's own value, not read from any file.
+        volumes_from = [f"worker_{device_group}"]
         # pull required image
         if force_pull is True:
             if not docker_socket.pull_image(image_name, version_tag=version_name):
