@@ -1,6 +1,7 @@
 import json, os, socket, time, sys, docker
+from docker import auth as docker_auth
 
-from functions.identity.identity import read_registry_credential
+from functions.identity.identity import read_registry_credential, read_registry_host
 
 
 def _is_non_https_registry_error(exc):
@@ -18,11 +19,12 @@ class DockerFunctions:
 
     def __init__(self):
         self.cli = docker.APIClient(base_url='unix://var/run/docker.sock', version="auto")
-        # fallback registry credential for pull_image, used only if
+        # fallback registry credential/host for pull_image, used only if
         # credential.json can't be read - set by registry_login, from
         # whatever this worker was originally started with.
         self._registry_user = None
         self._registry_pass = None
+        self._registry_host = None
 
     # check network exists:
     def check_network_exists(self, net_name):
@@ -111,6 +113,9 @@ class DockerFunctions:
 
     # login to docker registry
     def registry_login(self, registry_user=None, registry_pass=None, registry_host=""):
+        # stored regardless of whether credentials were also given - pull_image
+        # needs to know which registry this worker is configured for either way.
+        self._registry_host = registry_host
         if registry_user is not None and registry_user != "skip" and registry_pass is not None and \
                 registry_pass != "skip":
             # remembered as pull_image's fallback if credential.json can't be
@@ -149,7 +154,21 @@ class DockerFunctions:
         # only place that needs to know about a rotated registry credential
         # at all, so the worker's own check-in loop doesn't need to.
         registry_user, registry_pass = read_registry_credential(self._registry_user, self._registry_pass)
-        auth_config = {"username": registry_user, "password": registry_pass} if registry_user and registry_pass else None
+        registry_host = read_registry_host(self._registry_host)
+        # only attach the stored credential if it's actually for the registry
+        # this image belongs to - resolve_repository_name/resolve_index_name
+        # are docker-py's own normalization (the same it uses internally),
+        # so e.g. registry_host="https://index.docker.io/v1/" correctly
+        # matches a bare "redis:latest" pull. Without this check, a
+        # credential configured for one registry would get sent to every
+        # registry's pull attempt, including unrelated public images on a
+        # different registry entirely - which can fail outright rather than
+        # just being ignored, since it looks like a bad/mismatched login
+        # attempt rather than no attempt at all.
+        image_registry, _ = docker_auth.resolve_repository_name(image_name)
+        stored_registry = docker_auth.resolve_index_name(registry_host) if registry_host else None
+        auth_config = {"username": registry_user, "password": registry_pass} \
+            if registry_user and registry_pass and stored_registry == image_registry else None
         try:
             print(image_name)
             for line in self.cli.pull(image_name, str(version_tag), stream=True, auth_config=auth_config):

@@ -22,13 +22,18 @@ def _get_host_ip():
 
 def bootstrap_identity(device_group, nebula_username, nebula_password,
                        reporter_host=None, reporter_port=None, reporter_protocol="http",
-                       registry_username=None, registry_password=None):
+                       registry_username=None, registry_password=None, registry_host=None):
     # one-time worker identity bootstrap - writes host.json/credential.json to disk
     # and registers with reporter's worker directory. Only runs the node_id-generating
     # part once per worker: if host.json already exists, its node_id is reused as-is
     # and never regenerated - everything else (ips, device_group) is written fresh
     # every call. Periodic refresh after this initial call is handled by a separate,
     # dedicated cron job component, not by this worker process.
+    #
+    # registry_host is also what pull_image compares against the registry
+    # resolved from each image reference, to decide whether the stored
+    # registry_username/password actually applies to that pull - see
+    # read_registry_host and docker_engine.py's pull_image.
     os.makedirs(os.path.dirname(HOST_JSON_PATH), exist_ok=True)
 
     if os.path.exists(HOST_JSON_PATH):
@@ -69,7 +74,8 @@ def bootstrap_identity(device_group, nebula_username, nebula_password,
     try:
         with open(CREDENTIAL_JSON_PATH, "w") as f:
             json.dump({"username": nebula_username, "password": nebula_password,
-                      "registry_username": registry_username, "registry_password": registry_password}, f)
+                      "registry_username": registry_username, "registry_password": registry_password,
+                      "registry_host": registry_host}, f)
         os.chmod(CREDENTIAL_JSON_PATH, 0o600)
     except Exception as e:
         print(e, file=sys.stderr)
@@ -126,3 +132,18 @@ def read_registry_credential(default_username, default_password):
         print(e, file=sys.stderr)
         print("failed reading credential.json for registry auth - using last known credential")
         return default_username, default_password
+
+
+def read_registry_host(default_host):
+    # same fallback rules as read_credential/read_registry_credential.
+    # Read fresh alongside the registry credential, since a refresh that
+    # rotates to a different registry entirely needs its host picked up
+    # the same way the credential itself is.
+    try:
+        with open(CREDENTIAL_JSON_PATH) as f:
+            data = json.load(f)
+        return data.get("registry_host") or default_host
+    except Exception as e:
+        print(e, file=sys.stderr)
+        print("failed reading credential.json for registry host - using last known host")
+        return default_host
