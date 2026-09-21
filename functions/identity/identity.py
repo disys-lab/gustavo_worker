@@ -20,6 +20,24 @@ def _get_host_ip():
         s.close()
 
 
+def _get_remote_ip():
+    # A NAT'd host can't determine its own public IP locally - this
+    # genuinely requires an external vantage point, no way around it.
+    # icanhazip.com is Cloudflare-fronted, plain-text response, widely
+    # used for exactly this (Streamlit does the same). Best-effort only:
+    # "-" on any failure (network, timeout, non-200) - never blocks or
+    # fails bootstrap over this.
+    try:
+        resp = requests.get("https://ipv4.icanhazip.com", timeout=5)
+        if resp.status_code == 200:
+            return resp.text.strip()
+        print(f"external IP lookup failed: HTTP {resp.status_code}", file=sys.stderr)
+    except Exception as e:
+        print(e, file=sys.stderr)
+        print("external IP lookup failed - using '-' placeholder")
+    return "-"
+
+
 def bootstrap_identity(device_group, nebula_username, nebula_password,
                        reporter_host=None, reporter_port=None, reporter_protocol="http",
                        registry_username=None, registry_password=None, registry_host=None):
@@ -49,19 +67,9 @@ def bootstrap_identity(device_group, nebula_username, nebula_password,
 
     host_ip = _get_host_ip()
     auth = (nebula_username, nebula_password)
-
-    remote_ip = ""
-    if reporter_host is not None:
-        try:
-            resp = requests.get(f"{reporter_protocol}://{reporter_host}:{reporter_port}/whoami",
-                                auth=auth, timeout=10)
-            if resp.status_code == 200:
-                remote_ip = resp.json().get("remote_ip", "")
-            else:
-                print(f"whoami call failed: HTTP {resp.status_code} {resp.text}", file=sys.stderr)
-        except Exception as e:
-            print(e, file=sys.stderr)
-            print("whoami call failed - continuing with empty remote_ip")
+    # queried directly, not via reporter's /whoami - one less round-trip
+    # (and one less reporter-side credential verification) per bootstrap.
+    remote_ip = _get_remote_ip()
 
     try:
         with open(HOST_JSON_PATH, "w") as f:
