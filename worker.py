@@ -111,6 +111,10 @@ def start_cron_job_container(cron_job_json, force_pull=True, container_type="cro
     if cron_job_json["running"] is True:
         image_registry_name, image_name, version_name = split_container_name_version(cron_job_json["docker_image"])
         containers_needed = 1
+        # Every cron job container inherits this worker's own volumes, unconditionally -
+        # no cron job config field, no per-job opt-in. device_group is this same running
+        # process's own value, not read from any file.
+        volumes_from = [f"worker_{device_group}"]
         # pull required image
         if force_pull is True:
             if not docker_socket.pull_image(image_name, version_tag=version_name):
@@ -130,7 +134,7 @@ def start_cron_job_container(cron_job_json, force_pull=True, container_type="cro
                        kwargs={"container_type": container_type, "gpu_enabled": gpu_enabled,
                                "command": cron_job_json.get("command"),
                                "shm_size": cron_job_json.get("shm_size"),
-                               "volumes_from": cron_job_json.get("volumes_from")})
+                               "volumes_from": volumes_from})
             threads.append(t)
             t.start()
             container_number = container_number + 1
