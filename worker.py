@@ -129,7 +129,8 @@ def start_cron_job_container(cron_job_json, force_pull=True, container_type="cro
                                                                  cron_job_json["networks"], None),
                        kwargs={"container_type": container_type, "gpu_enabled": gpu_enabled,
                                "command": cron_job_json.get("command"),
-                               "shm_size": cron_job_json.get("shm_size")})
+                               "shm_size": cron_job_json.get("shm_size"),
+                               "volumes_from": cron_job_json.get("volumes_from")})
             threads.append(t)
             t.start()
             container_number = container_number + 1
